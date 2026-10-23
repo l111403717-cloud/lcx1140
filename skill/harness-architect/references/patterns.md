@@ -33,7 +33,7 @@
 
 ### 2.1 Pipeline Relay（多会话接力）
 
-Pipeline 模式默认按“一个模块、一个新会话、一次验收、一次交接”推进。模块状态写入 PROGRESS.md，环境门禁证据仍写入 .harness/gate.json。下一模块只能由依赖全部完成的 TODO 模块中选择；当前模块的验收、check_env.py、runner.py check-env、runner.py status 和 runner.py verify 全部通过后才可交接。
+Pipeline 模式默认按“一个模块、一个新会话、一次验收、一次交接”推进。模块状态写入 .harness/PLAN.md，环境门禁证据以 .harness/state.json 与 hx verify 为准。下一模块只能由依赖全部完成的 TODO 模块中选择；当前模块的验收、hx verify 全部通过且 hx handoff --check 确认 FRESH 后才可交接。
 
 适用时使用 AUTO 隔离子代理；宿主不具备隔离上下文时使用 MANUAL，输出完整接力提示词。任何失败、过期证据、范围冲突或信息缺口都停在当前模块并转 BLOCKED，不能调度下一模块。
 

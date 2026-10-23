@@ -39,6 +39,8 @@ echo "=== 开始安装 Harness 全局集成 ==="
 # 1. 链接 Skill 目录
 link "$H/skill/harness-architect" "$HOME/.codex/skills/harness-architect"
 link "$H/skill/harness-architect" "$HOME/.gemini/config/skills/harness-architect"
+link "$H/skill/map" "$HOME/.codex/skills/map"
+link "$H/skill/map" "$HOME/.gemini/config/skills/map"
 
 # 2. 链接 Codex 裁判代理与 Antigravity 钩子
 link "$H/adapters/codex/agents/harness-verifier.toml" "$HOME/.codex/agents/harness-verifier.toml"
