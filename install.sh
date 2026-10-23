@@ -18,10 +18,16 @@ inject(){
   touch "$f"
   local tmp
   tmp=$(mktemp)
-  awk '/<!-- HARNESS-GATE BEGIN/{s=1} !s{print} /<!-- HARNESS-GATE END/{s=0}' "$f" > "$tmp"
+  python3 -c '
+import sys, re
+c = open(sys.argv[1]).read()
+cleaned = re.sub(r"\n*<!-- HARNESS-GATE BEGIN[\s\S]*?<!-- HARNESS-GATE END -->", "", c).rstrip()
+print(cleaned)
+' "$f" > "$tmp"
   {
     cat "$tmp"
-    echo
+    echo ""
+    echo ""
     cat "$H/gate/micro-gate.md"
   } > "$f"
   rm -f "$tmp"
@@ -44,7 +50,7 @@ ln -sfn "$H/bin/hx" "$HOME/.local/bin/hx"
 echo "已链接 hx 到 $HOME/.local/bin/hx"
 ln -sfn "$H/bin/hx" /usr/local/bin/hx 2>/dev/null || true
 
-# 4. 注入全局微契约（保留用户原有其他规则）
+# 4. 注入全局微契约（保留用户原有其他规则，去除累积空行）
 inject "$HOME/.codex/AGENTS.md"
 inject "$HOME/.gemini/GEMINI.md"
 

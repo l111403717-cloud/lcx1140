@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # hx — Harness 确定性执行器：把「探测 / 锁定 / 验证 / 审计 / 拦截」从提示词搬进脚本
-# 用法: hx detect | hx lock [--refresh] | hx baseline | hx verify [--quick] | hx audit
+# 用法: hx detect | hx lock [--refresh] | hx baseline | hx verify [--quick] | hx audit | hx gc
 #       hx guard | hx stop   （后两个给 Antigravity hooks 调用，从 stdin 读 JSON）
 set -uo pipefail
 
@@ -41,6 +41,7 @@ detect(){   # 按「便宜→昂贵」输出验证链，一行一条命令；--q
 }
 
 lock(){ mkdir -p "$LOCKDIR"
+  echo "$ROOT" > "$LOCKDIR/repo_root"
   # shellcheck disable=SC2086
   files=$(ls -d $LOCK_GLOBS 2>/dev/null)
   [ -n "$files" ] && shasum -a 256 $files > "$LOCKDIR/lock.sha"
@@ -50,6 +51,7 @@ lock(){ mkdir -p "$LOCKDIR"
   echo "LOCKED $LOCKDIR base=$(git rev-parse --short refs/harness/base 2>/dev/null || echo none)"; }
 
 baseline(){ mkdir -p "$LOCKDIR"; : > "$LOCKDIR/baseline.tsv"   # 记录「改之前」每条命令的退出码与错误数
+  echo "$ROOT" > "$LOCKDIR/repo_root"
   detect | while IFS= read -r c; do
     out=$(run "$c" 2>&1); rc=$?; n=$(printf %s "$out" | grep -ciE 'error|failed')
     printf '%s\t%s\t%s\n' "$rc" "$n" "$c" >> "$LOCKDIR/baseline.tsv"
@@ -63,6 +65,13 @@ audit(){ in_git || { echo "AUDIT SKIP 非 git 仓库"; return 0; }
     && { echo "AUDIT ✗ 新增放水语句"; bad=1; }
   git ls-files --others --exclude-standard | grep -E '^[^/]+\.(py|sh|mjs)$' \
     && { echo "AUDIT ✗ 项目根新增未跟踪脚本"; bad=1; }
+  # 检查未跟踪的新文件内容中是否含有放水语句
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    if [ -f "$f" ] && grep -qE '(\.(skip|only)\(|@ts-(ignore|nocheck)|eslint-disable|type: *ignore|# *noqa|\|\| *true|exit 0)' "$f" 2>/dev/null; then
+      echo "AUDIT ✗ 新建未跟踪文件 ($f) 包含放水语句"; bad=1
+    fi
+  done < <(git ls-files --others --exclude-standard)
   if [ -f "$LOCKDIR/lock.sha" ] && ! shasum -a 256 -c --quiet "$LOCKDIR/lock.sha" >/dev/null 2>&1; then
     echo "AUDIT ✗ 验证入口/配置被改（如属需求，请用户批准后 hx lock --refresh）"; bad=1; fi
   echo "AUDIT changed_files=$( { git diff "$base" --name-only; git ls-files --others --exclude-standard; } | sort -u | grep -c . )"
@@ -82,6 +91,30 @@ verify(){ mkdir -p "$LOCKDIR/logs"; fail=0; ran=0
   [ "$ran" -eq 0 ] && echo "NO_TOOLCHAIN 无可用验证命令 → 仅 diff 审计，需人工冒烟"
   audit || fail=1
   echo "RESULT $([ $fail -eq 0 ] && echo PASS || echo FAIL)"; return $fail; }
+
+gc(){
+  local locks_dir="$HOME/.harness-locks"
+  [ -d "$locks_dir" ] || { echo "GC: $locks_dir 不存在"; return 0; }
+  local cleaned=0
+  for d in "$locks_dir"/*; do
+    [ -d "$d" ] || continue
+    local root_file="$d/repo_root"
+    if [ -f "$root_file" ]; then
+      local repo
+      repo=$(cat "$root_file" 2>/dev/null || echo "")
+      if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+        echo "GC 清理孤儿目录: $d (对应仓库不存在: $repo)"
+        rm -rf "$d"
+        cleaned=$((cleaned + 1))
+      fi
+    else
+      echo "GC 清理未标识孤儿目录: $d"
+      rm -rf "$d"
+      cleaned=$((cleaned + 1))
+    fi
+  done
+  echo "GC 完成: 共清理 $cleaned 个残留目录"
+}
 
 GUARD_PY='
 import sys,json,os,hashlib
@@ -105,7 +138,15 @@ case "${1:-}" in
   baseline) baseline ;;
   verify) verify "${2:-}" ;;
   audit) audit ;;
-  guard) python3 -c "$GUARD_PY" "$IN" "$ROOT" 2>/dev/null || echo '{"decision":"allow"}' ;;
+  gc) gc ;;
+  guard)
+    err=$(mktemp 2>/dev/null || echo "/tmp/hx-guard-err.log")
+    if ! python3 -c "$GUARD_PY" "$IN" "$ROOT" 2>"$err"; then
+      mkdir -p "$HOME/.harness-locks" 2>/dev/null || true
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] guard python3 failure: $(cat "$err" 2>/dev/null)" >> "$HOME/.harness-locks/guard-error.log" 2>/dev/null || true
+      echo '{"decision":"allow"}'
+    fi
+    rm -f "$err" ;;
   stop) { in_git && ! git diff --quiet 2>/dev/null && mkdir -p "$LOCKDIR" && audit > "$LOCKDIR/last-audit.txt" 2>&1; } ; echo '{}' ;;
   *) sed -n '2,4p' "$0"; exit 2 ;;
 esac
