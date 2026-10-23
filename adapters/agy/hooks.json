@@ -1,0 +1,21 @@
+{
+  "harness-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "write_file|edit_file",
+        "hooks": [
+          {
+            "command": "~/ai-harness/bin/hx guard",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "command": "~/ai-harness/bin/hx stop",
+        "timeout": 60
+      }
+    ]
+  }
+}

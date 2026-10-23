@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# hx — Harness 确定性执行器：把「探测 / 锁定 / 验证 / 审计 / 拦截」从提示词搬进脚本
+# 用法: hx detect | hx lock [--refresh] | hx baseline | hx verify [--quick] | hx audit
+#       hx guard | hx stop   （后两个给 Antigravity hooks 调用，从 stdin 读 JSON）
+set -uo pipefail
+
+# ---- hook 模式：工作目录是 hooks.json 所在目录，需从 stdin 取真实工作区 ----
+IN=""
+case "${1:-}" in guard|stop)
+  IN=$(cat)
+  WS=$(printf %s "$IN" | python3 -c 'import sys,json;print((json.load(sys.stdin).get("workspacePaths") or [""])[0])' 2>/dev/null)
+  cd "$WS" 2>/dev/null || { [ "$1" = guard ] && echo '{"decision":"allow"}' || echo '{}'; exit 0; } ;;
+esac
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd); cd "$ROOT" || exit 2
+HX=.harness
+LOCKDIR="$HOME/.harness-locks/$(printf %s "$ROOT" | shasum | cut -c1-12)"   # 锁放仓库外，模型改不到
+LOCK_GLOBS="package.json Makefile Cargo.toml go.mod pyproject.toml tsconfig*.json eslint.config.* .eslintrc* vitest.config.* jest.config.* playwright.config.*"
+
+in_git(){ git rev-parse --git-dir >/dev/null 2>&1; }
+run(){ perl -e 'alarm shift; exec @ARGV' "${HX_TIMEOUT:-300}" sh -c "$1"; }   # macOS 没有 timeout 命令
+pm(){ [ -f pnpm-lock.yaml ] && { echo pnpm; return; }; [ -f bun.lockb ] && { echo bun; return; }
+      [ -f yarn.lock ] && { echo yarn; return; }; echo npm; }
+has_script(){ node -e "const s=(require('./package.json').scripts||{})['$1'];process.exit(s&&!/no test specified/.test(s)?0:1)" 2>/dev/null; }
+
+detect(){   # 按「便宜→昂贵」输出验证链，一行一条命令；--quick 只取第一条
+  if [ -f package.json ]; then P=$(pm)
+    has_script typecheck && echo "$P run typecheck"
+    [ -f tsconfig.json ] && ! has_script typecheck && echo "npx --no-install tsc --noEmit"
+    for s in lint test build; do has_script "$s" && echo "$P run $s"; done
+  fi
+  [ -f Cargo.toml ] && { echo "cargo check"; echo "cargo test"; }
+  [ -f go.mod ] && { echo "go vet ./..."; echo "go test ./..."; }
+  if [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+    echo "python3 -m compileall -q -x '(\.venv|node_modules)' ."
+    command -v ruff >/dev/null && echo "ruff check ."
+    [ -d tests ] && command -v pytest >/dev/null && echo "pytest -q"
+  fi
+  if [ -f Makefile ]; then for t in check verify test; do grep -qE "^$t:" Makefile && { echo "make $t"; break; }; done; fi
+  return 0
+}
+
+lock(){ mkdir -p "$LOCKDIR"
+  # shellcheck disable=SC2086
+  files=$(ls -d $LOCK_GLOBS 2>/dev/null)
+  [ -n "$files" ] && shasum -a 256 $files > "$LOCKDIR/lock.sha"
+  if in_git && [ "${1:-}" != --refresh ]; then          # 影子基线：不动工作区，把当前脏状态存成一个 ref
+    b=$(git stash create 2>/dev/null); git update-ref refs/harness/base "${b:-$(git rev-parse HEAD)}" 2>/dev/null
+  fi
+  echo "LOCKED $LOCKDIR base=$(git rev-parse --short refs/harness/base 2>/dev/null || echo none)"; }
+
+baseline(){ mkdir -p "$LOCKDIR"; : > "$LOCKDIR/baseline.tsv"   # 记录「改之前」每条命令的退出码与错误数
+  detect | while IFS= read -r c; do
+    out=$(run "$c" 2>&1); rc=$?; n=$(printf %s "$out" | grep -ciE 'error|failed')
+    printf '%s\t%s\t%s\n' "$rc" "$n" "$c" >> "$LOCKDIR/baseline.tsv"
+  done; cat "$LOCKDIR/baseline.tsv"; }
+
+audit(){ in_git || { echo "AUDIT SKIP 非 git 仓库"; return 0; }
+  base=$(git rev-parse -q --verify refs/harness/base || echo HEAD); bad=0
+  git diff "$base" -U0 --no-color -- '*test*' '*spec*' | grep -v '^---' | grep -E '^-.*(expect|assert|it\(|test\(|describe\()' \
+    && { echo "AUDIT ✗ 删除/改写了既有断言"; bad=1; }
+  git diff "$base" -U0 --no-color | grep -v '^+++' | grep -E '^\+.*(\.(skip|only)\(|@ts-(ignore|nocheck)|eslint-disable|type: *ignore|# *noqa|\|\| *true|exit 0)' \
+    && { echo "AUDIT ✗ 新增放水语句"; bad=1; }
+  git ls-files --others --exclude-standard | grep -E '^[^/]+\.(py|sh|mjs)$' \
+    && { echo "AUDIT ✗ 项目根新增未跟踪脚本"; bad=1; }
+  if [ -f "$LOCKDIR/lock.sha" ] && ! shasum -a 256 -c --quiet "$LOCKDIR/lock.sha" >/dev/null 2>&1; then
+    echo "AUDIT ✗ 验证入口/配置被改（如属需求，请用户批准后 hx lock --refresh）"; bad=1; fi
+  echo "AUDIT changed_files=$( { git diff "$base" --name-only; git ls-files --others --exclude-standard; } | sort -u | grep -c . )"
+  return $bad; }
+
+verify(){ mkdir -p "$LOCKDIR/logs"; fail=0; ran=0
+  while IFS= read -r c; do [ -z "$c" ] && continue; ran=1
+    log="$LOCKDIR/logs/$(printf %s "$c" | tr -c 'A-Za-z0-9' _).log"
+    run "$c" >"$log" 2>&1; rc=$?; n=$(grep -ciE 'error|failed' "$log")
+    b=$(awk -F'\t' -v c="$c" '$3==c{print $1" "$2}' "$LOCKDIR/baseline.tsv" 2>/dev/null)
+    if [ "$rc" -eq 0 ]; then echo "PASS $c"
+    elif [ -n "$b" ] && [ "${b%% *}" -ne 0 ] && [ "$n" -le "${b##* }" ]; then
+      echo "PRE  $c (改前就失败，错误数 $n ≤ ${b##* }，未恶化)"            # 棘轮：不要求修旧账，只要求不变差
+    else echo "FAIL $c (exit $rc, log: $log)"; fail=1; fi
+    [ "${1:-}" = --quick ] && break
+  done < <(detect)
+  [ "$ran" -eq 0 ] && echo "NO_TOOLCHAIN 无可用验证命令 → 仅 diff 审计，需人工冒烟"
+  audit || fail=1
+  echo "RESULT $([ $fail -eq 0 ] && echo PASS || echo FAIL)"; return $fail; }
+
+GUARD_PY='
+import sys,json,os,hashlib
+j=json.loads(sys.argv[1]); a=j.get("toolCall",{}).get("args",{})
+p=a.get("TargetFile") or a.get("Path") or a.get("AbsolutePath") or ""
+root=sys.argv[2]
+def out(d,r=""): print(json.dumps({"decision":d,"reason":r})); sys.exit(0)
+if not p: out("allow")
+if not os.path.realpath(p).startswith(os.path.realpath(root)): out("ask","Harness: 写入工作区之外")
+rel=os.path.relpath(os.path.realpath(p),os.path.realpath(root))
+lock=os.path.expanduser("~/.harness-locks/"+hashlib.sha1(root.encode()).hexdigest()[:12]+"/lock.sha")
+if os.path.exists(lock) and any(l.split()[-1]==rel for l in open(lock) if l.strip()):
+    out("deny","Harness: "+rel+" 是已锁定的验证入口，需用户批准 hx lock --refresh")
+if "/" not in rel and rel.endswith((".py",".sh",".mjs")) and not os.path.exists(p):
+    out("deny","Harness: 临时脚本请写到 .harness/ 或系统临时目录")
+out("allow")'
+
+case "${1:-}" in
+  detect) detect ;;
+  lock) lock "${2:-}" ;;
+  baseline) baseline ;;
+  verify) verify "${2:-}" ;;
+  audit) audit ;;
+  guard) python3 -c "$GUARD_PY" "$IN" "$ROOT" 2>/dev/null || echo '{"decision":"allow"}' ;;
+  stop) { in_git && ! git diff --quiet 2>/dev/null && mkdir -p "$LOCKDIR" && audit > "$LOCKDIR/last-audit.txt" 2>&1; } ; echo '{}' ;;
+  *) sed -n '2,4p' "$0"; exit 2 ;;
+esac
