@@ -1,0 +1,4 @@
+__pycache__/
+!.harness/
+.harness/*
+!.harness/verify.json

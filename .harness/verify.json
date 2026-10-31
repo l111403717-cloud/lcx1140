@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "auto_detect": false,
+  "commands": [
+    {
+      "name": "hx-syntax",
+      "kind": "check",
+      "argv": ["bash", "-c", "bash -n bin/hx && bash -n install.sh && \"${HX_PYTHON:-python3}\" -B -c 'import ast,pathlib; [ast.parse(pathlib.Path(p).read_text(encoding=\"utf-8\"), filename=p) for p in (\"bin/hx.py\", \"tests/test_hx.py\")]'"],
+      "timeout": 10
+    },
+    {
+      "name": "hx-regression",
+      "kind": "test",
+      "argv": ["bash", "-c", "exec \"${HX_PYTHON:-python3}\" -B -m unittest discover -s tests -q"],
+      "timeout": 120
+    }
+  ]
+}

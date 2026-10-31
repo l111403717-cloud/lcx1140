@@ -17,8 +17,8 @@
 
 ## 3. 模块出口门禁
 只有同时满足以下两条，当前推进的模块状态才允许从 `IN_PROGRESS` 变为 `DONE`：
-1. 运行 `hx verify` 输出为 `RESULT PASS`（或仅含历史 `PRE` 项，未恶化）；
-2. 运行 `hx handoff --check` 退出码为 0（输出为 `FRESH`）。
+1. 当前模块所需验收实际完成，`hx verify` 输出 `RESULT PASS` 且退出码为 0；历史失败仍为失败，quick 未跑项、仅审计与检查不完整不能豁免；
+2. 运行 `hx handoff --check` 退出码为 0，输出 `FRESH`，并另行确认 `VERIFICATION PASS`。FRESH 只证明交接匹配。
 未满足时保持 `IN_PROGRESS`，并在 Handoff 段的“④ 未完成 / 风险”中如实写明阻塞原因。
 
 ## 4. 施工纪律
@@ -35,6 +35,7 @@
 > 1. 先运行 `hx handoff --check`，确认状态为 FRESH；
 > 2. 当前推进模块：<模块ID>（写入白名单：<文件列表>）；
 > 3. 接力第一步：<直接执行的具体动作与命令>；
+```
 ## 6. 状态流转约束
 - 严禁擅自修改已锁定模块的完成状态。
 - 接力过程以代码实际 diff 为准，任何口头声明必须经由 `hx verify` 与 `hx handoff --check` 双重校验通过。

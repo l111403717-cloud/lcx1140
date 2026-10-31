@@ -49,8 +49,12 @@ link "$H/adapters/agy/hooks.json" "$HOME/.gemini/config/hooks.json"
 # 3. 链接 hx 可执行脚本到用户 PATH
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$H/bin/hx" "$HOME/.local/bin/hx"
+link "$H/bin/hx.py" "$HOME/.local/bin/hx.py"
 echo "已链接 hx 到 $HOME/.local/bin/hx"
-ln -sfn "$H/bin/hx" /usr/local/bin/hx 2>/dev/null || true
+if [ -w /usr/local/bin ]; then
+  link "$H/bin/hx" /usr/local/bin/hx
+  link "$H/bin/hx.py" /usr/local/bin/hx.py
+fi
 
 # 4. 注入全局微契约（保留用户原有其他规则，去除累积空行）
 inject "$HOME/.codex/AGENTS.md"

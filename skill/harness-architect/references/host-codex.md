@@ -18,6 +18,6 @@ Codex 的原生 `spawn_agent` / 子代理能力可以用于 AUTO 模式，但这
 
 ## 2. 只读验收裁判代理（harness-verifier）
 
-在 Tier 1 / Tier 2 收尾验收阶段，主代理可派发 `harness-verifier` 独立运行验收命令：
-- 裁判只运行 `hx verify` / `git diff` 并如实记录退出码与输出。
+确需独立验收且已有授权时，主代理可派发 `harness-verifier`；普通小改和静态上传按全局轻量约定执行，不默认派发裁判或重跑完整回归：
+- 裁判运行 `hx verify` / `git diff`，分别记录退出码、功能覆盖、审计与证据状态；verify 的 2 表示不完整，不能改写为 PASS。FRESH/0 仅代表交接匹配，历史失败不会自动豁免。
 - 裁判禁止编辑任何业务文件，不为了通过测试而擅改命令。

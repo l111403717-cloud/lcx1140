@@ -15,8 +15,14 @@
 2. Rust (`Cargo.toml`)：`cargo --version` + `cargo check` / `cargo test`
 3. Go (`go.mod`)：`go version` + `go vet ./...` / `go test ./...`
 4. Python (`pyproject.toml`/`requirements.txt`)：`python3 --version` + `pytest` / `ruff` / `pyright`
-5. 通用构建 (`Makefile`/`Justfile`/`Taskfile.yml`)：优先调用已定义的 `check` / `test` / `verify`
+5. 通用构建：`hx` 自动探测 Makefile 的 `check` / `verify` / `test`；Justfile、Taskfile 及静态项目专项脚本通过 `.harness/verify.json` 明确登记，不搜索后自动执行任意脚本。
 6. 复用已知可用环境，不为每阶段重复查版本。无现成验证器时选择最小有意义的检查，并如实标明覆盖；确需控制脚本时才放入 `.harness/`，不为了满足门禁制造没有验证价值的探针。
+
+### 3.1 hx 验证覆盖契约
+- 在实际项目根目录调用，或使用 `hx --root <项目路径>`，不借父仓库扩大审计范围。登记格式和完整退出码见仓库 `README.md`。
+- `verify` 的 0/1/2 分别表示声明覆盖完整通过、真实失败、覆盖不完整；分别查看 `functional`、`AUDIT` 和执行数量。类型检查、构建或仅审计不等于功能通过，quick 只运行第一条。
+- 历史失败仍汇报 FAIL；相同错误数量或输出不能证明没有新问题。无 Git/HEAD、Git 子命令异常、超时或未执行均保留覆盖限制。
+- 普通开发与只读工作不因缺少完整验证而自动停止；按风险补充检查，交付时明确缺口。源代码、相关测试、命令或配置变化后重跑受影响验证，不复用过期证据。
 
 ### 4.1 执行、返工与等待预算
 - 信息足够时直接开始，不设置固定的“准备时长”或等待仪式；只有存在具体未知点时才继续定点调查，并在没有新证据时停止重复准备。
